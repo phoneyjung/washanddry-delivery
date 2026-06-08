@@ -210,6 +210,9 @@
     <textarea class="admin-input" id="adminInput"
       placeholder="ตัวอย่าง:&#10;https://maps.app.goo.gl/xxxxx&#10;หรือ 13.811021, 100.042163"></textarea>
     <button class="admin-btn" id="btnCheckUrl">🔎 เช็คโซนจาก link/พิกัด</button>
+    <button class="admin-btn" id="btnOpenInMaps" style="display:none; background:#3b82f6; color:white; margin-top:6px;">
+      🗺️ เปิดใน Google Maps (วิธี manual)
+    </button>
     <div class="admin-status" id="adminStatus"></div>
   </div>
 </div>
@@ -412,31 +415,36 @@
     return null;
   }
 
-  // resolve short link → full URL ผ่าน proxy
+  // resolve short link → full URL ผ่าน proxy (with timeout)
   async function resolveShortLink(url) {
+    const TIMEOUT_MS = 6000;
     // ลองหลาย proxy เผื่อตัวไหนใช้ไม่ได้
     const attempts = [
-      // allorigins: คืน JSON มี contents + status.url
-      async () => {
-        const resp = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`);
+      async (signal) => {
+        const resp = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, { signal });
         const data = await resp.json();
         return (data.status?.url || '') + '\n' + (data.contents || '');
       },
-      // corsproxy.io: คืน raw HTML
-      async () => {
-        const resp = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`);
+      async (signal) => {
+        const resp = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`, { signal });
+        return (resp.url || '') + '\n' + (await resp.text());
+      },
+      async (signal) => {
+        const resp = await fetch(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`, { signal });
         return await resp.text();
       },
-      // codetabs: คืน raw HTML
-      async () => {
-        const resp = await fetch(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`);
+      async (signal) => {
+        const resp = await fetch(`https://api.cors.lol/?url=${encodeURIComponent(url)}`, { signal });
         return await resp.text();
       }
     ];
 
     for (const tryFetch of attempts) {
       try {
-        const text = await tryFetch();
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+        const text = await tryFetch(controller.signal);
+        clearTimeout(timer);
         const coords = extractCoords(text);
         if (coords) return coords;
       } catch (e) {
@@ -450,9 +458,11 @@
     const input = document.getElementById('adminInput').value.trim();
     const status = document.getElementById('adminStatus');
     const btn = document.getElementById('btnCheckUrl');
+    const btnOpen = document.getElementById('btnOpenInMaps');
 
     status.className = 'admin-status';
     status.textContent = '';
+    btnOpen.style.display = 'none';
 
     if (!input) {
       status.textContent = 'กรุณาวาง link หรือพิกัด';
@@ -486,10 +496,10 @@
       return;
     }
 
-    // 4. ถ้าเป็น short link → resolve ผ่าน proxy
+    // 4. ถ้าเป็น short link → ลอง resolve ผ่าน proxy
     if (input.match(/maps\.app\.goo\.gl|goo\.gl\/maps|maps\.google\./i)) {
       btn.disabled = true;
-      status.textContent = '⏳ กำลังดึงพิกัดจาก link...';
+      status.textContent = '⏳ กำลังดึงพิกัดจาก link (อาจใช้เวลา 10-20 วินาที)...';
       const coords = await resolveShortLink(input);
       btn.disabled = false;
 
@@ -498,13 +508,31 @@
         status.textContent = `✅ พิกัด: ${coords[0].toFixed(6)}, ${coords[1].toFixed(6)}`;
       } else {
         status.className = 'admin-status error';
-        status.innerHTML = '❌ ดึงพิกัดไม่สำเร็จ<br>ลองเปิด link ในแท็บใหม่ → copy URL จาก address bar (หลัง redirect) → วางใหม่';
+        status.innerHTML = '❌ ดึงพิกัดอัตโนมัติไม่สำเร็จ — ใช้วิธี manual ด้านล่างได้ ใช้เวลา 5 วินาที';
+        btnOpen.style.display = 'block';
+        btnOpen.dataset.url = input;
       }
       return;
     }
 
     status.className = 'admin-status error';
     status.textContent = 'ไม่พบพิกัดในข้อความ ตรวจรูปแบบ link/พิกัดอีกครั้ง';
+  });
+
+  // ปุ่ม manual fallback — เปิด link ในแท็บใหม่
+  document.getElementById('btnOpenInMaps').addEventListener('click', () => {
+    const url = document.getElementById('btnOpenInMaps').dataset.url;
+    const status = document.getElementById('adminStatus');
+    window.open(url, '_blank');
+    status.className = 'admin-status';
+    status.innerHTML = `
+      <b>📋 ขั้นตอน:</b><br>
+      1. รอ Google Maps โหลดเสร็จในแท็บใหม่<br>
+      2. ดู URL ใน address bar — จะเปลี่ยนเป็น <code>https://www.google.com/maps/...</code> (URL ยาวๆ)<br>
+      3. <b>copy URL ใหม่</b> จาก address bar<br>
+      4. กลับมาที่หน้านี้ → <b>วางทับ link เก่า</b> ในช่องด้านบน → กดเช็คอีกครั้ง<br>
+      5. คราวนี้จะเจอพิกัดทันที (parse จาก URL ตรง)
+    `;
   });
 
   function applyLocation(latlng) {
