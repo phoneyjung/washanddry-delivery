@@ -112,6 +112,63 @@
     font-size: 24px;
     text-align: center;
   }
+  /* === ข้อมูลระยะทาง/เวลา === */
+  .trip-info {
+    margin-top: 10px;
+    padding: 12px 14px;
+    background: #f8f9fa;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    font-size: 14px;
+    display: none;
+  }
+  .trip-info.show { display: block; }
+  .trip-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 0;
+  }
+  .trip-row .val { font-weight: 700; color: #1d1d1f; }
+  /* === กล่องข้อความตอบลูกค้า === */
+  .copy-box {
+    margin-top: 10px;
+    display: none;
+  }
+  .copy-box.show { display: block; }
+  .copy-label {
+    font-size: 12px;
+    color: #6e6e73;
+    margin-bottom: 6px;
+  }
+  .copy-text {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1.7;
+    resize: vertical;
+    min-height: 120px;
+    background: #fafafa;
+    color: #1d1d1f;
+  }
+  .copy-btn {
+    width: 100%;
+    margin-top: 8px;
+    padding: 13px;
+    background: #00B900;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .copy-btn:active { transform: scale(0.98); }
+  .copy-btn.copied { background: #6b7280; }
   /* === Admin tools (สำหรับร้าน) === */
   .admin-section {
     margin-top: 20px;
@@ -191,6 +248,19 @@
     <div class="contact-row" id="contactRow" style="display:none;">
       <button class="contact-btn" onclick="window.location.href='tel:0812345678'">📞 โทรหาร้าน</button>
     </div>
+  </div>
+
+  <!-- ระยะทาง + เวลาถึง -->
+  <div class="trip-info" id="tripInfo">
+    <div class="trip-row"><span>🛵 ระยะทาง</span><span class="val" id="distText">-</span></div>
+    <div class="trip-row"><span>⏱️ ถึงภายใน</span><span class="val" id="etaText">-</span></div>
+  </div>
+
+  <!-- ข้อความตอบลูกค้า -->
+  <div class="copy-box" id="copyBox">
+    <div class="copy-label">ข้อความสำหรับตอบลูกค้า (แก้ไขได้):</div>
+    <textarea class="copy-text" id="copyText"></textarea>
+    <button class="copy-btn" id="btnCopy">📋 คัดลอกข้อความ</button>
   </div>
 
   <div class="legend">
@@ -334,33 +404,153 @@
     return null;
   }
 
+  // ===== คำนวณระยะทาง + เวลา =====
+  const SPEED_KMH = 40; // ความเร็วมอเตอร์ไซค์ (กม./ชม.)
+
+  // ระยะทางเส้นตรง (haversine) — ใช้เป็น fallback
+  function haversine(lat1, lng1, lat2, lng2) {
+    const R = 6371; // รัศมีโลก (กม.)
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  // ระยะทางจริงตามถนน (OSRM) — ถ้าใช้ไม่ได้ fallback เป็นเส้นตรง × 1.3
+  async function getRoadDistance(lat1, lng1, lat2, lng2) {
+    try {
+      const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson`;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6000);
+      const resp = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+      const data = await resp.json();
+      if (data.routes && data.routes[0]) {
+        return {
+          km: data.routes[0].distance / 1000,
+          geometry: data.routes[0].geometry, // GeoJSON LineString
+          source: 'road'
+        };
+      }
+    } catch (e) {
+      console.warn('OSRM failed, ใช้ระยะเส้นตรงแทน:', e);
+    }
+    // fallback: เส้นตรง × 1.3 (ประมาณระยะตามถนน)
+    return { km: haversine(lat1, lng1, lat2, lng2) * 1.3, geometry: null, source: 'estimate' };
+  }
+
+  // เวลาขับ (นาที) จากระยะทาง
+  function calcMinutes(km) {
+    return Math.max(1, Math.ceil(km / SPEED_KMH * 60));
+  }
+
+  // สร้างข้อความตอบลูกค้า
+  function buildMessage(zone, km, minutes) {
+    const etaLow = minutes;
+    const etaHigh = minutes + 10;
+    return `🧺 Wash & Dry — จัดส่ง
+
+📍 ค่าจัดส่ง ${zone.price} บาท
+🛵 ระยะทาง ~${km.toFixed(1)} กม.
+⏱️ ถึงภายใน ${etaLow}-${etaHigh} นาที
+
+* เวลาโดยประมาณ อาจคลาดเคลื่อนตามสภาพจราจรและคิวงาน`;
+  }
+
   // ===== แสดงผล =====
   let userMarker = null;
+  let routeLine = null;
 
-  function showResult(latlng) {
+  async function showResult(latlng) {
     const point = [latlng.lat, latlng.lng];
     const zone = getZone(point);
     const resultEl = document.getElementById('result');
     const zoneEl = document.getElementById('zoneText');
     const priceEl = document.getElementById('priceText');
     const contactRow = document.getElementById('contactRow');
+    const tripInfo = document.getElementById('tripInfo');
+    const copyBox = document.getElementById('copyBox');
+    const distText = document.getElementById('distText');
+    const etaText = document.getElementById('etaText');
+    const copyText = document.getElementById('copyText');
 
     resultEl.className = 'result show';
+
+    // หมุดลูกค้า
+    if (userMarker) map.removeLayer(userMarker);
+    userMarker = L.marker(latlng).addTo(map).bindPopup('ตำแหน่งลูกค้า').openPopup();
+
+    // ลบเส้นทางเก่า
+    if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+
     if (zone) {
       resultEl.classList.add(zone.name);
       zoneEl.textContent = zone.label;
       priceEl.textContent = `ค่าส่ง ${zone.price} บาท`;
       contactRow.style.display = 'none';
+
+      // แสดงสถานะกำลังคำนวณ
+      tripInfo.classList.add('show');
+      distText.textContent = 'กำลังคำนวณ...';
+      etaText.textContent = '...';
+      copyBox.classList.remove('show');
+
+      // คำนวณระยะทาง + เวลา
+      const dist = await getRoadDistance(SHOP_LOCATION[0], SHOP_LOCATION[1], latlng.lat, latlng.lng);
+      const minutes = calcMinutes(dist.km);
+      const distLabel = dist.source === 'road' ? `~${dist.km.toFixed(1)} กม.` : `~${dist.km.toFixed(1)} กม. (ประมาณ)`;
+
+      distText.textContent = distLabel;
+      etaText.textContent = `${minutes}-${minutes + 10} นาที`;
+
+      // ข้อความตอบลูกค้า
+      copyText.value = buildMessage(zone, dist.km, minutes);
+      copyBox.classList.add('show');
+
+      // วาดเส้นทางบนแผนที่
+      if (dist.geometry) {
+        // เส้นทางจริงตามถนน (OSRM)
+        routeLine = L.geoJSON(dist.geometry, {
+          style: { color: '#00B900', weight: 4, opacity: 0.7 }
+        }).addTo(map);
+      } else {
+        // เส้นตรง (fallback)
+        routeLine = L.polyline([SHOP_LOCATION, [latlng.lat, latlng.lng]], {
+          color: '#00B900', weight: 3, opacity: 0.6, dashArray: '8, 8'
+        }).addTo(map);
+      }
     } else {
       resultEl.classList.add('out');
       zoneEl.textContent = '🙏 ขออภัย';
       priceEl.textContent = 'พื้นที่นี้อยู่นอกเขตจัดส่ง ติดต่อร้านเพื่อสอบถามเพิ่มเติม';
       contactRow.style.display = 'flex';
+      tripInfo.classList.remove('show');
+      copyBox.classList.remove('show');
     }
-
-    if (userMarker) map.removeLayer(userMarker);
-    userMarker = L.marker(latlng).addTo(map).bindPopup('ตำแหน่งคุณ').openPopup();
   }
+
+  // ปุ่มคัดลอกข้อความ
+  document.getElementById('btnCopy').addEventListener('click', () => {
+    const text = document.getElementById('copyText').value;
+    const btn = document.getElementById('btnCopy');
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = '✅ คัดลอกแล้ว';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = '📋 คัดลอกข้อความ';
+        btn.classList.remove('copied');
+      }, 2000);
+    }).catch(() => {
+      // fallback ถ้า clipboard API ใช้ไม่ได้
+      const ta = document.getElementById('copyText');
+      ta.select();
+      document.execCommand('copy');
+      btn.textContent = '✅ คัดลอกแล้ว';
+      setTimeout(() => { btn.textContent = '📋 คัดลอกข้อความ'; }, 2000);
+    });
+  });
 
   // กดบนแผนที่
   map.on('click', e => showResult(e.latlng));
@@ -385,7 +575,10 @@
   // รีเซ็ต
   document.getElementById('btnReset').addEventListener('click', () => {
     if (userMarker) { map.removeLayer(userMarker); userMarker = null; }
+    if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
     document.getElementById('result').className = 'result';
+    document.getElementById('tripInfo').classList.remove('show');
+    document.getElementById('copyBox').classList.remove('show');
     if (allPoints.length > 0) {
       map.fitBounds(L.latLngBounds(allPoints), { padding: [20, 20] });
     }
