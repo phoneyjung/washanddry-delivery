@@ -696,8 +696,9 @@
       return;
     }
 
-    // 2. ลอง parse พิกัดดิบ "13.8110, 100.0421"
-    const rawMatch = input.match(/^\s*(-?\d+\.?\d*)\s*[,\s]+\s*(-?\d+\.?\d*)\s*$/);
+    // 2. ลอง parse พิกัดดิบ — รองรับ "13.81, 100.04", "(13.81, 100.04)" [iPhone], "13.81 100.04"
+    const cleaned = input.replace(/[()]/g, '').trim();
+    const rawMatch = cleaned.match(/^\s*(-?\d+\.?\d*)\s*[,\s]+\s*(-?\d+\.?\d*)\s*$/);
     if (rawMatch) {
       const lat = parseFloat(rawMatch[1]), lng = parseFloat(rawMatch[2]);
       if (lat > 5 && lat < 21 && lng > 97 && lng < 106) {
