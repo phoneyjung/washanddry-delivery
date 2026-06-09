@@ -474,15 +474,12 @@
 
   // สร้างข้อความตอบลูกค้า
   function buildMessage(zone, km, minutes) {
-    const etaLow = minutes;
-    const etaHigh = minutes + 10;
-    return `🧺 Wash & Dry — จัดส่ง
+    // หมายเหตุ: ตัวแปร minutes ยังคำนวณไว้แสดงให้ร้านดูบนหน้าจอ (⏱️ ถึงภายใน)
+    //           แต่ไม่ใส่ในข้อความตอบลูกค้า ตามที่ต้องการ
+    return `🧸 Teddy Wash & Dry — จัดส่ง
 
 📍 ค่าจัดส่ง ${zone.price} บาท
-🛵 ระยะทาง ~${km.toFixed(1)} กม.
-⏱️ ถึงภายใน ${etaLow}-${etaHigh} นาที
-
-* เวลาโดยประมาณ อาจคลาดเคลื่อนตามสภาพจราจรและคิวงาน`;
+🛵 ระยะทาง ~${km.toFixed(1)} กม.`;
   }
 
   // ===== แสดงผล =====
